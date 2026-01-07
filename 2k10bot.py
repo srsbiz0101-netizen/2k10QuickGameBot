@@ -10,45 +10,43 @@ from enum import Enum
 # CONFIG
 # -----------------------------
 
-# OCR region for 1360x768 (tweak if needed)
 OCR_REGION = {"top": 140, "left": 280, "width": 800, "height": 220}
 
-# OCR behavior
-CHECK_INTERVAL = 5                 # seconds between OCR reads while waiting
-ENDSCREEN_CONFIRMATIONS = 3        # require N consecutive hits before acting
+CHECK_INTERVAL = 5
+ENDSCREEN_CONFIRMATIONS = 3
 
-# Input timing (press-style)
-INPUT_GAP = 0.30                   # delay after each input/action
-PRESS_DURATION = 0.35              # default press length for most keys
-DIR_PRESS_DURATION = 0.30          # direction press length for left/right nudges
+INPUT_GAP = 0.30
 
-# Direction+Confirm behavior
-PRE_HOLD = 0.35                    # hold direction(s) before confirming
-POST_HOLD = 0.35                   # keep holding direction(s) after confirming
+# Menu timing (2a/2b need stick hold + confirm hold)
+MENU_DIR_HOLD_BEFORE_CONFIRM = 0.80
+MENU_CONFIRM_HOLD = 0.80
+MENU_RELEASE_AFTER = 0.40
 
-# Menu settle delays
-SETTLE_SHORT = 1.0
-SETTLE_MED = 1.5
-SETTLE_LONG = 2.0
+SETTLE_SHORT = 1.2
+SETTLE_LONG = 2.5
 
-# Lockout after starting a game (prevents repeats while loading)
-GAME_LOCK_SECONDS = 90
+GAME_LOCK_SECONDS = 120
+
+# Quick Game cursor movement
+FORCE_SIDE_HOLD = 0.95      # long hold to guarantee far-left/far-right
+CENTER_STEP_TIME = 0.18     # short press = "one step" to center (tune 0.14–0.24 if needed)
 
 # -----------------------------
-# KEYBINDINGS (from your RPCS3 screenshot)
+# KEYBINDINGS
 # -----------------------------
 
-KEY_CONFIRM = "x"       # Cross
-KEY_BACK = "c"          # Circle
-KEY_START = "enter"     # Start/Return
-KEY_L2 = "r"            # L2
-KEY_R2 = "t"            # R2
+KEY_CONFIRM = "x"     # Cross
+KEY_BACK = "c"        # Circle
+KEY_START = "enter"   # Start/Enter
 
-# D-pad uses arrow keys (as mapped in your screenshot)
-KEY_UP = "up"
-KEY_DOWN = "down"
-KEY_LEFT = "left"
-KEY_RIGHT = "right"
+KEY_L2 = "r"
+KEY_R2 = "t"
+
+# LEFT STICK (WASD) — required for menus and Quick Game cursor here
+STICK_UP = "w"
+STICK_DOWN = "s"
+STICK_LEFT = "a"
+STICK_RIGHT = "d"
 
 # -----------------------------
 # STATE MACHINE
@@ -80,153 +78,120 @@ def ocr_text():
     print("OCR:", text)
     return text
 
-def classify_screen(text: str) -> str:
-    """
-    Returns one of:
-      - "END_SCREEN"
-      - "GAMEPLAY"
-      - "UNKNOWN"
-    """
-    t = text.replace(" ", "")
-
-    # End-of-game indicators (from your end screen)
-    if any(k in t for k in ["GAMEREEL", "GMOMENTS", "PRESSBOOK", "GAMEWRAPUP"]):
+def classify_screen(text: str):
+    if any(k in text for k in ["GAMEREEL", "GMOMENTS", "PRESSBOOK", "GAMEWRAPUP"]):
         return "END_SCREEN"
 
-    # Strong gameplay indicators (covers cutaways when clock/score isn't visible)
     gameplay_signals = [
         "ARENA", "CENTER", "PARK", "ORACLE", "GARDEN", "STAPLES",
         "DEFENSE", "OFFENSE", "REBOUND", "FOUL", "SHOT",
-        "ELLIS",  # player name seen in your screenshot (ok to keep)
-        "POR", "GS", "LAL", "BOS", "NYK", "MIA", "CHI"
+        "ELLIS", "POR", "GS", "LAL", "BOS", "NYK", "MIA", "CHI"
     ]
 
-    if any(sig in t for sig in gameplay_signals):
-        return "GAMEPLAY"
-
-    # Fallback: clock contains ":"
-    if ":" in t:
+    if any(k in text for k in gameplay_signals) or ":" in text:
         return "GAMEPLAY"
 
     return "UNKNOWN"
 
 # -----------------------------
-# INPUT HELPERS (PRESS-STYLE)
+# INPUT HELPERS
 # -----------------------------
 
-def press_key(key: str, duration: float = PRESS_DURATION):
+def press_key(key, duration=0.6):
     keyboard.press(key)
     time.sleep(duration)
     keyboard.release(key)
     time.sleep(INPUT_GAP)
 
-def press_keys_together(keys: list[str], duration: float = PRESS_DURATION):
-    for k in keys:
-        keyboard.press(k)
-    time.sleep(duration)
-    for k in keys:
-        keyboard.release(k)
-    time.sleep(INPUT_GAP)
-
-def press_direction(key: str, duration: float = DIR_PRESS_DURATION):
-    keyboard.press(key)
-    time.sleep(duration)
-    keyboard.release(key)
-    time.sleep(INPUT_GAP)
-
-def press_while_holding(confirm_key: str,
-                        hold_keys: list[str],
-                        pre_hold: float = PRE_HOLD,
-                        confirm_duration: float = PRESS_DURATION,
-                        post_hold: float = POST_HOLD):
+def press_and_hold_to_confirm(confirm_key, hold_keys):
     """
-    Hold directions, press confirm, keep holding, then release.
-    This is critical for menus 2a / 2b (and any directional confirm).
+    NBA 2K10 menu behavior (2a/2b):
+    Hold stick direction(s) -> wait -> hold X while directions held -> release X -> wait -> release directions
     """
     for k in hold_keys:
         keyboard.press(k)
 
-    time.sleep(pre_hold)
+    time.sleep(MENU_DIR_HOLD_BEFORE_CONFIRM)
 
     keyboard.press(confirm_key)
-    time.sleep(confirm_duration)
+    time.sleep(MENU_CONFIRM_HOLD)
     keyboard.release(confirm_key)
 
-    time.sleep(post_hold)
+    time.sleep(MENU_RELEASE_AFTER)
 
     for k in hold_keys:
         keyboard.release(k)
 
     time.sleep(INPUT_GAP)
 
-def press_many_direction(key: str, n: int, duration: float = DIR_PRESS_DURATION):
-    for _ in range(n):
-        press_direction(key, duration=duration)
+def stick_force(key, hold_time=FORCE_SIDE_HOLD, settle=0.50):
+    """Long hold to guarantee reaching far-left/far-right."""
+    keyboard.press(key)
+    time.sleep(hold_time)
+    keyboard.release(key)
+    time.sleep(settle)
 
-def randomize_team_under_cursor():
-    # Hold L2+R2 together (R+T) twice for reliability
-    press_keys_together([KEY_L2, KEY_R2], duration=0.35)
-    press_keys_together([KEY_L2, KEY_R2], duration=0.35)
+def stick_step(key, step_time=CENTER_STEP_TIME, settle=0.35):
+    """Single crisp stick 'step' intended to move exactly one column."""
+    keyboard.press(key)
+    time.sleep(step_time)
+    keyboard.release(key)
+    time.sleep(settle)
+
+def randomize_team():
+    keyboard.press(KEY_L2)
+    keyboard.press(KEY_R2)
+    time.sleep(0.55)
+    keyboard.release(KEY_L2)
+    keyboard.release(KEY_R2)
+    time.sleep(0.45)
 
 # -----------------------------
-# ACTIONS (based on your screenshots)
+# ACTIONS
 # -----------------------------
 
 def action_open_postgame_menu():
-    # Screenshot 1: Circle (C) opens menu 2a
-    print("ACTION: End screen -> press C (Circle) to open menu 2a")
-    press_key(KEY_BACK, duration=0.45)
+    print("ACTION: End screen → Circle (C)")
+    press_key(KEY_BACK, duration=0.7)
 
 def action_postgame_a_quit():
-    # Screenshot 2a: hold Down+Left, press X while held
-    print("ACTION: Menu 2a -> QUIT (hold Down+Left, press X)")
-    press_while_holding(KEY_CONFIRM, [KEY_DOWN, KEY_LEFT])
+    print("ACTION: Menu 2a → Quit (S + A held, X held)")
+    press_and_hold_to_confirm(KEY_CONFIRM, [STICK_DOWN, STICK_LEFT])
 
 def action_postgame_b_quick_game():
-    # Screenshot 2b: hold Down, press X while held
-    print("ACTION: Menu 2b -> QUICK GAME (hold Down, press X)")
-    press_while_holding(KEY_CONFIRM, [KEY_DOWN])
+    print("ACTION: Menu 2b → Quick Game (S held, X held)")
+    press_and_hold_to_confirm(KEY_CONFIRM, [STICK_DOWN])
 
 def action_quickgame_setup_and_start():
     """
-    Screenshot 3 rules:
-    - Force cursor LEFT by pressing LEFT twice (cursor not looped)
-    - Randomize AWAY on LEFT (hold R+T)
-    - Move to RIGHT by pressing RIGHT twice
-    - Randomize HOME on RIGHT (hold R+T)
-    - Return to CENTER by pressing LEFT once
-    - Start game ONLY from CENTER using Start/Enter
+    Quick Game setup:
+    1) Force LEFT -> randomize AWAY
+    2) Force RIGHT -> randomize HOME
+    3) One opposite step to CENTER (CPUvCPU)
+    4) Start with Enter
     """
-    print("ACTION: Quick Game setup -> randomize both teams and start CPUvCPU")
+    print("ACTION: Quick Game → Randomize BOTH teams + center for CPUvCPU")
 
-    time.sleep(SETTLE_MED)
+    time.sleep(1.2)
 
-    # Force cursor LEFT (safe regardless of current cursor position)
-    press_many_direction(KEY_LEFT, 2, duration=0.35)
-    time.sleep(0.4)
-
-    # Randomize AWAY
+    # Force LEFT (Away)
+    stick_force(STICK_LEFT)
     print(" - Randomizing AWAY (LEFT)")
-    randomize_team_under_cursor()
-    time.sleep(0.5)
+    randomize_team()
+    time.sleep(0.6)
 
-    # Move to RIGHT from LEFT
-    press_many_direction(KEY_RIGHT, 2, duration=0.35)
-    time.sleep(0.4)
-
-    # Randomize HOME
+    # Force RIGHT (Home)
+    stick_force(STICK_RIGHT)
     print(" - Randomizing HOME (RIGHT)")
-    randomize_team_under_cursor()
-    time.sleep(0.5)
+    randomize_team()
+    time.sleep(0.6)
 
-    # Return to CENTER (one left from right)
-    press_direction(KEY_LEFT, duration=0.35)
-    time.sleep(0.5)
+    # Return to CENTER: one opposite step from RIGHT -> CENTER
+    print(" - Returning to CENTER (one LEFT step)")
+    stick_step(STICK_LEFT, step_time=CENTER_STEP_TIME, settle=0.50)
 
-    # Start game from CENTER
-    print(" - Starting game from CENTER (Start/Enter)")
-    time.sleep(2.0)  # settle before start
-    press_key(KEY_START, duration=0.55)
+    print("ACTION: Start Game from CENTER (CPUvCPU)")
+    press_key(KEY_START, duration=0.9)
 
 # -----------------------------
 # MAIN LOOP
@@ -235,41 +200,34 @@ def action_quickgame_setup_and_start():
 def main():
     global state, end_hits, game_lock_until
 
-    print("NBA 2K10 CPUvCPU Loop Bot running (keyboard press-style + OCR + state machine).")
-    print("Press ESC at any time to stop.")
+    print("NBA 2K10 CPUvCPU BOT RUNNING — Press ESC to stop")
 
     while True:
-        # Emergency stop
         if keyboard.is_pressed("esc"):
-            print("ESC pressed — stopping bot.")
+            print("ESC pressed — exiting")
             return
 
         now = time.time()
 
-        # Hard lock while loading / early game to prevent repeats
         if state == BotState.GAME_RUNNING:
             if now < game_lock_until:
-                print("STATE: GAME_RUNNING (locked)...")
                 time.sleep(10)
                 continue
             else:
-                print("STATE: GAME_RUNNING lock expired -> WAIT_FOR_END")
                 state = BotState.WAIT_FOR_END
                 end_hits = 0
 
         if state == BotState.WAIT_FOR_END:
             text = ocr_text()
-            screen_type = classify_screen(text)
+            screen = classify_screen(text)
 
-            if screen_type == "GAMEPLAY":
+            if screen == "GAMEPLAY":
                 end_hits = 0
-                print("Gameplay detected. Ignoring.")
                 time.sleep(CHECK_INTERVAL)
                 continue
 
-            if screen_type == "END_SCREEN":
+            if screen == "END_SCREEN":
                 end_hits += 1
-                print(f"End screen hit {end_hits}/{ENDSCREEN_CONFIRMATIONS}")
                 if end_hits >= ENDSCREEN_CONFIRMATIONS:
                     end_hits = 0
                     state = BotState.OPEN_POSTGAME_MENU
@@ -297,12 +255,6 @@ def main():
             action_quickgame_setup_and_start()
             game_lock_until = time.time() + GAME_LOCK_SECONDS
             state = BotState.GAME_RUNNING
-            print(f"STATE: GAME_RUNNING (lock for {GAME_LOCK_SECONDS}s)")
-
-        else:
-            # Safety fallback
-            state = BotState.WAIT_FOR_END
-            time.sleep(2)
 
 if __name__ == "__main__":
     main()
