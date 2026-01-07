@@ -1,0 +1,1 @@
+you can run this any time after you start NBA2k10, based on update 1.2, not sure if it matters. it will use OCR to look for the screen that appears at the end of the game, then go to quick game, randomize both teams, and start a CPUvCPU game.
