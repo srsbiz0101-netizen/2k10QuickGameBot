@@ -9,11 +9,6 @@ from pathlib import Path
 CSV_PATH = Path("nba2k10_results.csv")
 OUT_PATH = Path("overlay.txt")
 
-# If you ever run from another folder, uncomment and set BASE
-# BASE = Path(r"C:\Users\srsbi\Desktop\2KAllDay")
-# CSV_PATH = BASE / "nba2k10_results.csv"
-# OUT_PATH = BASE / "overlay.txt"
-
 REFRESH_SECONDS = 5
 
 
@@ -33,14 +28,16 @@ def read_games():
         return []
 
     games = []
-    start_idx = 0
-    while start_idx < len(rows) and not rows[start_idx][0].strip():
-        start_idx += 1
 
-    for row in rows[start_idx + 1:]:
+    # Defensive header detection
+    header_idx = 0
+    while header_idx < len(rows) and not rows[header_idx][0].strip():
+        header_idx += 1
+
+    for row in rows[header_idx + 1:]:
         try:
             gnum = int(row[0])
-            ts = row[1].strip()
+            ts = row[1].strip() if len(row) > 1 else ""
             t1 = row[2].strip()
             s1 = int(row[3])
             t2 = row[4].strip()
@@ -85,34 +82,56 @@ def compute_team_stats(games):
 
     for t in games_played:
         gp = games_played[t]
-        win_pct[t] = (wins[t] / gp) if gp else 0.0
-        ppg[t] = (points_for[t] / gp) if gp else 0.0
+        win_pct[t] = wins[t] / gp if gp else 0.0
+        ppg[t] = points_for[t] / gp if gp else 0.0
 
     return wins, losses, win_pct, ppg, games_played
 
 
 # -----------------------------
-# ALL-TIME GAME EXTREMES
+# ALL-TIME GAME RECORDS
 # -----------------------------
 
 def compute_total_extremes(games):
-    """
-    Returns (high, low) where each is:
-      (gnum, t1, s1, t2, s2, total)
-    or (None, None) if no games.
-    """
     if not games:
         return None, None
 
-    # total points in a game = s1 + s2
     with_totals = [
         (gnum, t1, s1, t2, s2, s1 + s2)
         for (gnum, _ts, t1, s1, t2, s2) in games
     ]
+    return (
+        max(with_totals, key=lambda x: x[5]),
+        min(with_totals, key=lambda x: x[5]),
+    )
 
-    high = max(with_totals, key=lambda x: x[5])
-    low = min(with_totals, key=lambda x: x[5])
-    return high, low
+
+def compute_biggest_blowout(games):
+    if not games:
+        return None
+
+    candidates = []
+    for (gnum, _ts, t1, s1, t2, s2) in games:
+        if s1 == s2:
+            continue
+        if s1 > s2:
+            candidates.append((gnum, t1, s1, t2, s2, s1 - s2))
+        else:
+            candidates.append((gnum, t2, s2, t1, s1, s2 - s1))
+
+    return max(candidates, key=lambda x: x[5]) if candidates else None
+
+
+def compute_highest_team_score(games):
+    if not games:
+        return None
+
+    candidates = []
+    for (gnum, _ts, t1, s1, t2, s2) in games:
+        candidates.append((gnum, t1, s1, t2, s2))
+        candidates.append((gnum, t2, s2, t1, s1))
+
+    return max(candidates, key=lambda x: x[2])
 
 
 # -----------------------------
@@ -120,14 +139,8 @@ def compute_total_extremes(games):
 # -----------------------------
 
 def rank_top_bottom(teams, key_fn, n=3):
-    if not teams:
-        return [], []
-
     ranked = sorted(teams, key=key_fn, reverse=True)
-    top = ranked[:n]
-    bottom = list(reversed(ranked[-n:]))
-
-    return top, bottom
+    return ranked[:n], list(reversed(ranked[-n:]))
 
 
 # -----------------------------
@@ -141,72 +154,55 @@ def format_ticker(games):
     wins, losses, win_pct, ppg, games_played = compute_team_stats(games)
     teams = set(games_played.keys())
 
-    # Last game only
+    # Last game
     gnum, ts, t1, s1, t2, s2 = games[-1]
     last_final = f"FINAL #{gnum}: {t1} {s1}, {t2} {s2}"
 
-    # All-time high/low total scoring games
+    # Records
     high_game, low_game = compute_total_extremes(games)
+    blowout = compute_biggest_blowout(games)
+    high_team = compute_highest_team_score(games)
 
-    if high_game:
-        hgnum, ht1, hs1, ht2, hs2, htotal = high_game
-        high_total_text = f"HIGHEST TOTAL: #{hgnum} {ht1} {hs1}-{ht2} {hs2} ({htotal})"
+    hg = f"HIGHEST TOTAL: #{high_game[0]} {high_game[1]} {high_game[2]}-{high_game[3]} {high_game[4]} ({high_game[5]})"
+    lg = f"LOWEST TOTAL: #{low_game[0]} {low_game[1]} {low_game[2]}-{low_game[3]} {low_game[4]} ({low_game[5]})"
+
+    if blowout:
+        bg = f"BIGGEST BLOWOUT: #{blowout[0]} {blowout[1]} over {blowout[3]} by {blowout[5]} ({blowout[2]}-{blowout[4]})"
     else:
-        high_total_text = "HIGHEST TOTAL: N/A"
+        bg = "BIGGEST BLOWOUT: N/A"
 
-    if low_game:
-        lgnum, lt1, ls1, lt2, ls2, ltotal = low_game
-        low_total_text = f"LOWEST TOTAL: #{lgnum} {lt1} {ls1}-{lt2} {ls2} ({ltotal})"
+    if high_team:
+        ht = f"HIGHEST TEAM SCORE: #{high_team[0]} {high_team[1]} {high_team[2]} (vs {high_team[3]} {high_team[4]})"
     else:
-        low_total_text = "LOWEST TOTAL: N/A"
+        ht = "HIGHEST TEAM SCORE: N/A"
 
-    # Win % leaderboards
+    # Leaderboards
     def winpct_key(t):
         return (win_pct[t], wins[t], -losses[t], t)
 
-    top_winpct, bottom_winpct = rank_top_bottom(teams, winpct_key, n=3)
-
-    top_winpct_text = "TOP WIN%: " + ", ".join(
-        f"{t} {win_pct[t]:.3f} ({wins[t]}-{losses[t]})"
-        for t in top_winpct
-    )
-
-    bottom_winpct_text = "LOWEST WIN%: " + ", ".join(
-        f"{t} {win_pct[t]:.3f} ({wins[t]}-{losses[t]})"
-        for t in bottom_winpct
-    )
-
-    # PPG leaderboards
     def ppg_key(t):
         return (ppg[t], games_played[t], t)
 
-    top_ppg, bottom_ppg = rank_top_bottom(teams, ppg_key, n=3)
+    top_w, bot_w = rank_top_bottom(teams, winpct_key)
+    top_p, bot_p = rank_top_bottom(teams, ppg_key)
 
-    top_ppg_text = "TOP PPG: " + ", ".join(
-        f"{t} {ppg[t]:.1f}" for t in top_ppg
-    )
+    top_win = "TOP WIN%: " + ", ".join(f"{t} {win_pct[t]:.3f} ({wins[t]}-{losses[t]})" for t in top_w)
+    bot_win = "LOWEST WIN%: " + ", ".join(f"{t} {win_pct[t]:.3f} ({wins[t]}-{losses[t]})" for t in bot_w)
+    top_ppg = "TOP PPG: " + ", ".join(f"{t} {ppg[t]:.1f}" for t in top_p)
+    bot_ppg = "BOTTOM PPG: " + ", ".join(f"{t} {ppg[t]:.1f}" for t in bot_p)
 
-    bottom_ppg_text = "BOTTOM PPG: " + ", ".join(
-        f"{t} {ppg[t]:.1f}" for t in bottom_ppg
-    )
-
-    return (
-        "NBA 2K10 SIM — LIVE  |  "
-        + last_final
-        + "  |  "
-        + top_winpct_text
-        + "  |  "
-        + bottom_winpct_text
-        + "  |  "
-        + top_ppg_text
-        + "  |  "
-        + bottom_ppg_text
-        + "  |  "
-        + high_total_text
-        + "  |  "
-        + low_total_text
-        + "     "
-    )
+    return "  |  ".join([
+        "NBA 2K10 SIM — LIVE",
+        last_final,
+        top_win,
+        bot_win,
+        top_ppg,
+        bot_ppg,
+        hg,
+        lg,
+        bg,
+        ht,
+    ]) + "     "
 
 
 # -----------------------------
@@ -222,8 +218,7 @@ def main():
             size = CSV_PATH.stat().st_size if CSV_PATH.exists() else 0
             if size != last_size:
                 games = read_games()
-                ticker = format_ticker(games)
-                OUT_PATH.write_text(ticker, encoding="utf-8")
+                OUT_PATH.write_text(format_ticker(games), encoding="utf-8")
                 print("[overlay] updated")
                 last_size = size
         except Exception as e:
